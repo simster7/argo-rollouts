@@ -880,6 +880,49 @@ func TestBlueGreenNotReadyToScaleDownOldReplica(t *testing.T) {
 	expectedPatch := calculatePatch(r2, OnlyObservedGenerationPatch)
 	assert.Equal(t, expectedPatch, patch)
 }
+
+func TestBlueGreenNotReadyToScaleDownOldReplicaButLimit1(t *testing.T) {
+	f := newFixture(t)
+	defer f.Close()
+
+	r1 := newBlueGreenRollout("foo", 1, nil, "bar", "")
+	r2 := bumpVersion(r1)
+	r3 := bumpVersion(r2)
+
+	rs1 := newReplicaSetWithStatus(r1, 1, 1)
+	rs2 := newReplicaSetWithStatus(r2, 1, 1)
+	rs3 := newReplicaSetWithStatus(r3, 1, 1)
+	rs3PodHash := rs3.Labels[v1alpha1.DefaultRolloutUniqueLabelKey]
+
+	inTheFuture := metav1.Now().Add(10 * time.Second).UTC().Format(time.RFC3339)
+
+	rs1.Annotations[v1alpha1.DefaultReplicaSetScaleDownAtAnnotationKey] = inTheFuture
+	rs2.Annotations[v1alpha1.DefaultReplicaSetScaleDownAtAnnotationKey] = inTheFuture
+
+	serviceSelector := map[string]string{v1alpha1.DefaultRolloutUniqueLabelKey: rs3PodHash}
+	s := newService("bar", 80, serviceSelector)
+	f.kubeobjects = append(f.kubeobjects, s, rs1, rs2, rs3)
+	f.replicaSetLister = append(f.replicaSetLister, rs1, rs2, rs3)
+
+	r3 = updateBlueGreenRolloutStatus(r3, "", rs3PodHash, 3, 1, 1, false, true)
+	r3.Spec.Strategy.BlueGreenStrategy.ScaleDownDelayRevisionLimit = pointer.Int32Ptr(1)
+	f.rolloutLister = append(f.rolloutLister, r3)
+	f.objects = append(f.objects, r3)
+	f.serviceLister = append(f.serviceLister, s)
+
+	updatedRSIndex := f.expectUpdateReplicaSetAction(rs1)
+	patchIndex := f.expectPatchRolloutAction(r3)
+	f.run(getKey(r3, t))
+
+	updatedRS := f.getUpdatedReplicaSet(updatedRSIndex)
+	assert.Equal(t, rs1.Name, updatedRS.Name)
+	assert.Equal(t, int32(0), *updatedRS.Spec.Replicas)
+
+	patch := f.getPatchedRollout(patchIndex)
+	expectedPatch := calculatePatch(r3, OnlyObservedGenerationPatch)
+	assert.Equal(t, expectedPatch, patch)
+}
+
 func TestBlueGreenReadyToScaleDownOldReplica(t *testing.T) {
 	f := newFixture(t)
 	defer f.Close()

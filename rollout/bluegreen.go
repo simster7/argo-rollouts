@@ -141,16 +141,19 @@ func (c *RolloutController) reconcileBlueGreenPause(activeSvc, previewSvc *corev
 
 // scaleDownOldReplicaSetsForBlueGreen scales down old replica sets when rollout strategy is "Blue Green".
 func (c *RolloutController) scaleDownOldReplicaSetsForBlueGreen(oldRSs []*appsv1.ReplicaSet, rollout *v1alpha1.Rollout) (int32, error) {
-	sort.Sort(controller.ReplicaSetsByCreationTimestamp(oldRSs))
+	sort.Sort(replicasetutil.ReplicaSetsByRevisionNumber(oldRSs))
 
 	totalScaledDown := int32(0)
+	annotationedRSs := int32(0)
 	for _, targetRS := range oldRSs {
 		if scaleDownAtStr, ok := targetRS.Annotations[v1alpha1.DefaultReplicaSetScaleDownAtAnnotationKey]; ok {
-
+			annotationedRSs++
 			scaleDownAtTime, err := time.Parse(time.RFC3339, scaleDownAtStr)
 			logCtx := logutil.WithRollout(rollout)
 			if err != nil {
 				logCtx.Info("Unable to read scaleDownAt label")
+			} else if rollout.Spec.Strategy.BlueGreenStrategy.ScaleDownDelayRevisionLimit != nil && annotationedRSs == *rollout.Spec.Strategy.BlueGreenStrategy.ScaleDownDelayRevisionLimit {
+				logCtx.Info("At ScaleDownDelayRevisionLimit and scaling down the rest")
 			} else {
 				now := metav1.Now()
 				scaleDownAt := metav1.NewTime(scaleDownAtTime)
